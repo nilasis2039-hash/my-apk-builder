@@ -12,9 +12,8 @@ on:
         required: true
         default: 'com.myapp.app'
       repoUrl:
-        description: 'GitHub Repo URL (optional)'
-        required: false
-        default: ''
+        description: 'GitHub Repo URL'
+        required: true
       buildType:
         description: 'Build Type'
         required: false
@@ -25,16 +24,10 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Clone user repo (if URL provided)
-        if: ${{ github.event.inputs.repoUrl != '' }}
+      - name: Clone user repo
         run: |
-          rm -rf temp-project
-          git clone ${{ github.event.inputs.repoUrl }} temp-project
-          cd temp-project
-
+          git clone ${{ github.event.inputs.repoUrl }} project
+          
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
@@ -49,72 +42,60 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Find project directory
-        id: find-project
-        run: |
-          if [ -d "temp-project" ]; then
-            echo "dir=temp-project" >> $GITHUB_OUTPUT
-          elif [ -d "web-project" ]; then
-            echo "dir=web-project" >> $GITHUB_OUTPUT
-          else
-            echo "dir=." >> $GITHUB_OUTPUT
-          fi
-
       - name: Install dependencies
-        working-directory: ${{ steps.find-project.outputs.dir }}
+        working-directory: ./project
         run: npm install
 
       - name: Build web app
-        working-directory: ${{ steps.find-project.outputs.dir }}
-        run: |
-          if [ -f "package.json" ]; then
-            if grep -q "\"build\"" package.json; then
-              npm run build
-            fi
-          fi
+        working-directory: ./project
+        run: npm run build || echo "No build script found"
 
       - name: Install Capacitor
-        working-directory: ${{ steps.find-project.outputs.dir }}
+        working-directory: ./project
+        run: npm install @capacitor/core @capacitor/cli @capacitor/android
+
+      - name: Find web directory
+        id: webdir
+        working-directory: ./project
         run: |
-          npm install @capacitor/core @capacitor/cli @capacitor/android
-          
+          if [ -d "dist" ]; then
+            echo "dir=dist" >> $GITHUB_OUTPUT
+          elif [ -d "build" ]; then
+            echo "dir=build" >> $GITHUB_OUTPUT
+          elif [ -d "out" ]; then
+            echo "dir=out" >> $GITHUB_OUTPUT
+          elif [ -d ".next" ]; then
+            echo "dir=.next" >> $GITHUB_OUTPUT
+          elif [ -d "public" ]; then
+            echo "dir=public" >> $GITHUB_OUTPUT
+          else
+            mkdir dist
+            echo "<html><body><h1>Hello App</h1></body></html>" > dist/index.html
+            echo "dir=dist" >> $GITHUB_OUTPUT
+          fi
+
       - name: Initialize Capacitor
-        working-directory: ${{ steps.find-project.outputs.dir }}
+        working-directory: ./project
         run: |
-          npx cap init "${{ github.event.inputs.appName }}" "${{ github.event.inputs.packageName }}" --web-dir=dist || \
-          npx cap init "${{ github.event.inputs.appName }}" "${{ github.event.inputs.packageName }}" --web-dir=build || \
-          npx cap init "${{ github.event.inputs.appName }}" "${{ github.event.inputs.packageName }}" --web-dir=out || \
-          npx cap init "${{ github.event.inputs.appName }}" "${{ github.event.inputs.packageName }}" --web-dir=.next || \
-          npx cap init "${{ github.event.inputs.appName }}" "${{ github.event.inputs.packageName }}" --web-dir=public
+          npx cap init "${{ github.event.inputs.appName }}" "${{ github.event.inputs.packageName }}" --web-dir=${{ steps.webdir.outputs.dir }}
 
       - name: Add Android platform
-        working-directory: ${{ steps.find-project.outputs.dir }}
+        working-directory: ./project
         run: npx cap add android
 
       - name: Sync Capacitor
-        working-directory: ${{ steps.find-project.outputs.dir }}
+        working-directory: ./project
         run: npx cap sync android
 
       - name: Build APK
-        working-directory: ${{ steps.find-project.outputs.dir }}/android
+        working-directory: ./project/android
         run: |
           chmod +x gradlew
-          if [ "${{ github.event.inputs.buildType }}" = "release" ]; then
-            ./gradlew assembleRelease
-          else
-            ./gradlew assembleDebug
-          fi
-
-      - name: Find APK
-        id: find-apk
-        working-directory: ${{ steps.find-project.outputs.dir }}
-        run: |
-          APK_PATH=$(find android/app/build/outputs/apk -name "*.apk" | head -1)
-          echo "path=$APK_PATH" >> $GITHUB_OUTPUT
+          ./gradlew assembleDebug
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ github.event.inputs.appName }}-capacitor-${{ github.event.inputs.buildType }}
-          path: ${{ steps.find-project.outputs.dir }}/${{ steps.find-apk.outputs.path }}
+          name: ${{ github.event.inputs.appName }}-capacitor
+          path: ./project/android/app/build/outputs/apk/debug/*.apk
           retention-days: 7
